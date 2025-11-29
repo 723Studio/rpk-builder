@@ -1,0 +1,12 @@
+{
+    "name": "oxcfta-packer",
+    "version": "1.0.0",
+    "description": "Packer/unpacker for OXCFTA container (AES-256-GCM encrypted manifest + per-file blobs).",
+    "main": "src/main.js",
+    "scripts": {
+        "pack": "node src/main.js",
+        "unpack": "node src/unpack.js"
+    },
+    "author": "Finnik",
+    "license": "MIT"
+}
