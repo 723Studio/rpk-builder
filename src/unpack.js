@@ -3,9 +3,10 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const YAML = require('yaml');
 const { deriveKey, decryptAesGcm } = require('./utils/crypto');
 
-const VERSION_EXPECTED = 1;
+const VERSION_EXPECTED = 2;
 
 function usage() {
   console.error('Usage: node src/unpack.js <container_file> <output_folder> <passphrase>');
@@ -66,8 +67,23 @@ function unpack() {
     pos += 16;
 
     const key = deriveKey(passphrase, salt);
-    const manifestJson = decryptAesGcm(key, ivMan, encMan, tagMan);
-    const manifest = JSON.parse(manifestJson.toString('utf8'));
+    // Расшифровываем манифест (теперь это YAML, а не JSON)
+    const manifestPlaintext = decryptAesGcm(key, ivMan, encMan, tagMan);
+
+    const manifest = YAML.parse(manifestPlaintext.toString('utf8'));
+
+    // Небольшая защита от битых контейнеров
+    if (!manifest?.files || !Array.isArray(manifest.files)) {
+      throw new Error('Invalid or corrupted manifest: no files array');
+    }
+
+    console.log('Unpack: Passphrase:', passphrase);
+    console.log('Unpack: Salt (hex):', salt.toString('hex'));
+    console.log('Unpack: Manifest IV (hex):', ivMan.toString('hex'));
+    console.log('Unpack: LenMan:', lenMan);
+    console.log('Unpack: EncMan length:', encMan.length);  // должно быть lenMan - 16
+    console.log('Unpack: Tag (hex):', tagMan.toString('hex'));
+    console.log('Unpack: Derived Key (hex):', key.toString('hex'));
 
     const dataSectionStart = pos;
 

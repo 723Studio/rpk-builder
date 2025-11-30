@@ -3,10 +3,11 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const YAML = require('yaml');
 const { deriveKey, randBytes, encryptAesGcm } = require('./utils/crypto');
 
 const MAGIC = Buffer.from('OXFTA1\0\0');
-const VERSION = Buffer.from([1]);
+const VERSION = Buffer.from([2]);
 
 function shouldCompressByExt(filename) {
   const compressible = ['.txt', '.json', '.rul', '.yaml', '.yml', '.js', '.css', '.html', '.svg'];
@@ -17,6 +18,10 @@ function shouldCompressByExt(filename) {
 function pack(fileList, salt, manifestIv, outFile, passphrase) {
   const key = deriveKey(passphrase, salt);
 
+  console.log('Pack: Passphrase:', passphrase);
+  console.log('Pack: Salt (hex):', salt.toString('hex'));
+  console.log('Pack: Manifest IV (hex):', manifestIv.toString('hex'));
+  console.log('Pack: Derived Key (hex):', key.toString('hex'));
 
   const fileBlobs = [];
   let dataOffset = 0;
@@ -56,14 +61,24 @@ function pack(fileList, salt, manifestIv, outFile, passphrase) {
   }
 
 
-  // build manifest JSON
-  const manifest = { files: fileBlobs.map(b => ({ path: b.path, offset: b.offset, length: b.length, compressed: b.compressed, iv: b.iv, tag: b.tag })) };
-  const manifestJson = Buffer.from(JSON.stringify(manifest), 'utf8');
+  const manifestObj = { 
+    files: fileBlobs.map(b => ({ 
+      path: b.path, 
+      offset: b.offset, 
+      length: b.length, 
+      compressed: b.compressed, 
+      iv: b.iv, 
+      tag: b.tag 
+    })) 
+  };
 
+  // YAML.stringify даёт строку, сразу превращаем в Buffer
+  const manifestYaml = Buffer.from(YAML.stringify(manifestObj), 'utf8');
 
   // encrypt manifest with same key + manifestIv
-  const { ciphertext: encMan, tag: tagMan } = encryptAesGcm(key, manifestIv, manifestJson);
-
+  const { ciphertext: encMan, tag: tagMan } = encryptAesGcm(key, manifestIv, manifestYaml);
+  console.log('Pack: Encrypted manifest length:', encMan.length);
+  console.log('Pack: Tag (hex):', tagMan.toString('hex'));
 
   // write container
   const outFd = fs.openSync(outFile, 'w');

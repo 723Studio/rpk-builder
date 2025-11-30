@@ -8,5 +8,8 @@
         "unpack": "node src/unpack.js"
     },
     "author": "Finnik",
-    "license": "MIT"
+    "license": "MIT",
+    "dependencies": {
+        "yaml": "^2.8.2"
+    }
 }
