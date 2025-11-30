@@ -4,10 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const YAML = require('yaml');
-const { deriveKey, randBytes, encryptAesGcm } = require('./utils/crypto');
+const { deriveKey, randBytes, encryptCbcHmac } = require('./utils/crypto');
 
 const MAGIC = Buffer.from('OXFTA1\0\0');
-const VERSION = Buffer.from([2]);
+const VERSION = Buffer.from([3]);
 
 function shouldCompressByExt(filename) {
   const compressible = ['.txt', '.json', '.rul', '.yaml', '.yml', '.js', '.css', '.html', '.svg'];
@@ -17,11 +17,6 @@ function shouldCompressByExt(filename) {
 
 function pack(fileList, salt, manifestIv, outFile, passphrase) {
   const key = deriveKey(passphrase, salt);
-
-  console.log('Pack: Passphrase:', passphrase);
-  console.log('Pack: Salt (hex):', salt.toString('hex'));
-  console.log('Pack: Manifest IV (hex):', manifestIv.toString('hex'));
-  console.log('Pack: Derived Key (hex):', key.toString('hex'));
 
   const fileBlobs = [];
   let dataOffset = 0;
@@ -44,17 +39,23 @@ function pack(fileList, salt, manifestIv, outFile, passphrase) {
     }
 
 
-    const iv = randBytes(12);
-    const { ciphertext, tag } = encryptAesGcm(key, iv, payload);
-    // store ciphertext + tag as blob
-    const blob = Buffer.concat([ciphertext, tag]);
+    const iv = randBytes(16);
+    
+    const { ciphertext, mac } = encryptCbcHmac(
+      key.slice(0, 32),
+      key.slice(32),
+      iv,
+      payload
+    );
+    const blob = Buffer.concat([ciphertext, mac]);    // ciphertext + 32-byte HMAC
+    
     fileBlobs.push({
       path: fi.rel,
       offset: dataOffset,
       length: blob.length,
       compressed,
       iv: iv.toString('base64'),
-      tag: tag.toString('base64'),
+      mac: mac.toString('base64'),
       blob
     });
     dataOffset += blob.length;
@@ -68,7 +69,7 @@ function pack(fileList, salt, manifestIv, outFile, passphrase) {
       length: b.length, 
       compressed: b.compressed, 
       iv: b.iv, 
-      tag: b.tag 
+      mac: b.mac 
     })) 
   };
 
@@ -76,9 +77,12 @@ function pack(fileList, salt, manifestIv, outFile, passphrase) {
   const manifestYaml = Buffer.from(YAML.stringify(manifestObj), 'utf8');
 
   // encrypt manifest with same key + manifestIv
-  const { ciphertext: encMan, tag: tagMan } = encryptAesGcm(key, manifestIv, manifestYaml);
-  console.log('Pack: Encrypted manifest length:', encMan.length);
-  console.log('Pack: Tag (hex):', tagMan.toString('hex'));
+  const { ciphertext: encMan, mac: macMan } = encryptCbcHmac(
+      key.slice(0, 32),
+      key.slice(32),
+      manifestIv,
+      manifestYaml
+    );
 
   // write container
   const outFd = fs.openSync(outFile, 'w');
@@ -94,12 +98,12 @@ function pack(fileList, salt, manifestIv, outFile, passphrase) {
 
 
     const manifestLength = Buffer.alloc(4);
-    manifestLength.writeUInt32BE(encMan.length + 16, 0); // include tag length
+    manifestLength.writeUInt32BE(encMan.length + 32, 0);
     fs.writeSync(outFd, manifestLength);
 
 
     fs.writeSync(outFd, encMan);
-    fs.writeSync(outFd, tagMan);
+    fs.writeSync(outFd, macMan);
 
 
     for (const fb of fileBlobs) {

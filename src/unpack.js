@@ -4,9 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const YAML = require('yaml');
-const { deriveKey, decryptAesGcm } = require('./utils/crypto');
+const { deriveKey, decryptCbcHmac } = require('./utils/crypto');
 
-const VERSION_EXPECTED = 2;
+const VERSION_EXPECTED = 3;
 
 function usage() {
   console.error('Usage: node src/unpack.js <container_file> <output_folder> <passphrase>');
@@ -53,22 +53,35 @@ function unpack() {
     pos += 1;
     if (version !== VERSION_EXPECTED) throw new Error('Unsupported version: ' + version);
 
+    // Header layout:
+    // 0–7   : magic "OXFTA1\0\0"
+    // 8     : version (1 byte)
+    // 9–24  : salt (16)
+    // 25–40 : manifest IV (16)
+    // 41–44 : manifest encrypted length (4 bytes, unsigned BE)
+    // 45... : encrypted manifest + MAC, then file blobs
+
     const salt = readFixed(fd, pos, 16);
     pos += 16;
-    const ivMan = readFixed(fd, pos, 12);
-    pos += 12;
+    const ivMan = readFixed(fd, pos, 16);
+    pos += 16;
     const lenMan = readFixed(fd, pos, 4).readUInt32BE(0);
     pos += 4;
 
-    // lenMan включает размер ciphertext + tag (16 байт)
-    const encMan = readFixed(fd, pos, lenMan - 16);  // читаем ciphertext
-    pos += (lenMan - 16);
-    const tagMan = readFixed(fd, pos, 16);           // читаем tag
-    pos += 16;
+    const encMan = readFixed(fd, pos, lenMan - 32);   // ciphertext
+    pos += (lenMan - 32);
+    const macMan = readFixed(fd, pos, 32);            // HMAC 32 байта
+    pos += 32;
 
     const key = deriveKey(passphrase, salt);
-    // Расшифровываем манифест (теперь это YAML, а не JSON)
-    const manifestPlaintext = decryptAesGcm(key, ivMan, encMan, tagMan);
+
+    const manifestPlaintext = decryptCbcHmac(
+      key.slice(0, 32),
+      key.slice(32),
+      ivMan,
+      encMan,
+      macMan
+    );
 
     const manifest = YAML.parse(manifestPlaintext.toString('utf8'));
 
@@ -77,25 +90,24 @@ function unpack() {
       throw new Error('Invalid or corrupted manifest: no files array');
     }
 
-    console.log('Unpack: Passphrase:', passphrase);
-    console.log('Unpack: Salt (hex):', salt.toString('hex'));
-    console.log('Unpack: Manifest IV (hex):', ivMan.toString('hex'));
-    console.log('Unpack: LenMan:', lenMan);
-    console.log('Unpack: EncMan length:', encMan.length);  // должно быть lenMan - 16
-    console.log('Unpack: Tag (hex):', tagMan.toString('hex'));
-    console.log('Unpack: Derived Key (hex):', key.toString('hex'));
-
     const dataSectionStart = pos;
 
     for (const f of manifest.files) {
       const encLen = f.length;
       const encBuf = readFixed(fd, dataSectionStart + f.offset, encLen);
-      if (encBuf.length < 16) throw new Error('Blob too small');
-      const cipher = encBuf.slice(0, encBuf.length - 16);
-      const tag = encBuf.slice(encBuf.length - 16);
+      if (encBuf.length < 32) throw new Error('Blob too small');
+      const cipher = encBuf.slice(0, encBuf.length - 32);
 
       const iv = Buffer.from(f.iv, 'base64');
-      const plain = decryptAesGcm(key, iv, cipher, tag);
+      const mac = Buffer.from(f.mac, 'base64');
+      const plain = decryptCbcHmac(
+        key.slice(0, 32),
+        key.slice(32),
+        iv,
+        cipher,
+        mac
+      );
+
       let outBuf = plain;
       if (f.compressed) {
         outBuf = zlib.inflateSync(plain);

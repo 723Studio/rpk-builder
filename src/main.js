@@ -49,6 +49,6 @@ if (fileList.length === 0) {
 console.log(`Found ${fileList.length} files to pack`);
 
 const salt = randBytes(16);
-const manifestIv = randBytes(12);
+const manifestIv = randBytes(16);
 
 pack(fileList, salt, manifestIv, outputFile, passphrase);
